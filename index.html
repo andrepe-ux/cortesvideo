@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cortes de Vídeo</title>
+    <!-- JSZip para compactar em ZIP -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 20px;
+            background-color: #6767d1;
+            color: #333;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        video {
+            width: 100%;
+            max-height: 350px;
+            background: #000;
+            border-radius: 4px;
+        }
+        .time-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+            align-items: center;
+            background: #f9f9f9;
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #e1e1e1;
+        }
+        .time-row input[type="text"] {
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .time-row input.time-input { width: 110px; text-align: center; }
+        .time-row input.title-input { flex-grow: 1; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #cccccc; cursor: not-allowed; }
+        button.danger { background: #dc3545; }
+        button.danger:hover { background: #bd2130; }
+        #status {
+            margin-top: 10px;
+            font-weight: bold;
+            color: #007bff;
+        }
+        #intervalsContainer {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 15px;
+            padding-right: 5px;
+        }
+        .preview-item {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+        }
+        .preview-item video {
+            max-height: 200px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Cortes de Vídeos Automático</h2>
+
+    <div class="card">
+        <h3>1. Selecionar Vídeo (MP4)</h3>
+        <input type="file" id="upload" accept="video/mp4">
+    </div>
+
+    <div class="card">
+        <h3>2. Pré-visualização do Vídeo Principal</h3>
+        <video id="videoPlayer" controls></video>
+    </div>
+
+    <div class="card">
+        <h3>3. Definir Tempos e Títulos (Até 60)</h3>
+        <p style="font-size: 0.85em; color: #555;">
+            Formato aceito: <code>H:MM:SS</code> (ex: <code>0:01:23</code>), <code>MM:SS</code> (ex: <code>01:23</code>) ou segundos. 
+            <br>Cada corte subtrairá <strong>5s</strong> ao início e adicionará <strong>15s</strong> ao fim automaticamente.
+        </p>
+        <div id="intervalsContainer"></div>
+        <button onclick="adicionarLinha()" id="addBtn">+ Adicionar Intervalo</button>
+    </div>
+
+    <div class="card">
+        <h3>4. Processar, Ver Cortes e Descarregar</h3>
+        <button id="processBtn" onclick="processarCortes()" disabled>Executar Cortes e Gerar Pré-visualizações</button>
+        <div id="status">Selecione um vídeo para começar.</div>
+    </div>
+
+    <div class="card" id="previewCard" style="display:none;">
+        <h3>5. Pré-visualização dos Pequenos Vídeos Cortados</h3>
+        <div id="previewContainer"></div>
+        <br>
+        <button id="downloadZipBtn" onclick="descarregarZip()" style="background: #28a745; font-size: 1.1em; width: 100%;">Descarregar Todos em ZIP</button>
+    </div>
+
+<script>
+    let videoFile = null;
+    let videoDuration = 0;
+    const MAX_INTERVALS = 60;
+    let zipBlobGlobal = null;
+
+    const upload = document.getElementById('upload');
+    const videoPlayer = document.getElementById('videoPlayer');
+    const intervalsContainer = document.getElementById('intervalsContainer');
+    const addBtn = document.getElementById('addBtn');
+    const processBtn = document.getElementById('processBtn');
+    const statusDiv = document.getElementById('status');
+    const previewCard = document.getElementById('previewCard');
+    const previewContainer = document.getElementById('previewContainer');
+
+    upload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            videoFile = file;
+            videoPlayer.src = URL.createObjectURL(file);
+            videoPlayer.onloadedmetadata = () => {
+                videoDuration = videoPlayer.duration;
+                statusDiv.textContent = 'Vídeo carregado com sucesso. Pronto para cortar!';
+                processBtn.disabled = false;
+            };
+        }
+    });
+
+    function adicionarLinha(tempoSugerido = "", tituloSugerido = "") {
+        const rows = intervalsContainer.getElementsByClassName('time-row');
+        if (rows.length >= MAX_INTERVALS) {
+            alert('Limite máximo de 60 tempos atingido.');
+            return;
+        }
+
+        const index = rows.length + 1;
+        const row = document.createElement('div');
+        row.className = 'time-row';
+        row.innerHTML = `
+            <span style="font-weight:bold; width:25px;">#${index}</span>
+            <label>Tempo:</label>
+            <input type="text" class="time-input" placeholder="0:01:23" value="${tempoSugerido}">
+            <label>Título:</label>
+            <input type="text" class="title-input" placeholder="Ex: Introducao" value="${tituloSugerido}">
+            <button class="danger" onclick="removerLinha(this)">Remover</button>
+        `;
+        intervalsContainer.appendChild(row);
+        atualizarContadorBotoes();
+    }
+
+    function removerLinha(btn) {
+        btn.parentElement.remove();
+        atualizarNumeracao();
+        atualizarContadorBotoes();
+    }
+
+    function atualizarNumeracao() {
+        const rows = intervalsContainer.getElementsByClassName('time-row');
+        for (let i = 0; i < rows.length; i++) {
+            rows[i].querySelector('span').textContent = `#${i + 1}`;
+        }
+    }
+
+    function atualizarContadorBotoes() {
+        const rows = intervalsContainer.getElementsByClassName('time-row');
+        addBtn.disabled = rows.length >= MAX_INTERVALS;
+    }
+
+    adicionarLinha();
+
+    function parseTempo(str) {
+        str = str.trim();
+        if (!str) return NaN;
+        if (!str.includes(':')) return parseFloat(str);
+
+        const partes = str.split(':').map(Number);
+        if (partes.some(isNaN)) return NaN;
+
+        if (partes.length === 3) return partes[0] * 3600 + partes[1] * 60 + partes[2];
+        if (partes.length === 2) return partes[0] * 60 + partes[1];
+        return NaN;
+    }
+
+    function limparNomeFicheiro(nome) {
+        return nome.replace(/[/\\?%*:|"<>]/g, '_').trim() || 'video_cortado';
+    }
+
+    // Função para extrair o troço usando MediaRecorder nativo do navegador
+    async function cortarTrechoNativo(file, startTime, endTime) {
+        return new Promise((resolve, reject) => {
+            const video = document.createElement('video');
+            video.src = URL.createObjectURL(file);
+            video.muted = true;
+
+            video.onloadedmetadata = () => {
+                video.currentTime = Math.max(0, startTime);
+            };
+
+            video.onseeked = () => {
+                try {
+                    const stream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
+                    if (!stream) {
+                        reject(new Error("CaptureStream não suportado neste navegador."));
+                        return;
+                    }
+
+                    const options = { mimeType: 'video/webm;codecs=vp9' };
+                    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                        options.mimeType = 'video/webm';
+                    }
+
+                    const mediaRecorder = new MediaRecorder(stream, options);
+                    const chunks = [];
+
+                    mediaRecorder.ondataavailable = (e) => {
+                        if (e.data.size > 0) chunks.push(e.data);
+                    };
+
+                    mediaRecorder.onstop = () => {
+                        const blob = new Blob(chunks, { type: 'video/mp4' }); // ou webm adaptado
+                        resolve(blob);
+                    };
+
+                    mediaRecorder.start();
+                    video.play();
+
+                    const duracaoMs = (endTime - startTime) * 1000;
+                    setTimeout(() => {
+                        mediaRecorder.stop();
+                        video.pause();
+                        URL.revokeObjectURL(video.src);
+                    }, duracaoMs);
+
+                } catch (err) {
+                    reject(err);
+                }
+            };
+
+            video.onerror = (err) => reject(err);
+        });
+    }
+
+    async function processarCortes() {
+        if (!videoFile) {
+            alert('Por favor, selecione um vídeo primeiro.');
+            return;
+        }
+
+        const rows = intervalsContainer.getElementsByClassName('time-row');
+        if (rows.length === 0) {
+            alert('Adicione pelo menos um intervalo.');
+            return;
+        }
+
+        const tarefas = [];
+        for (let i = 0; i < rows.length; i++) {
+            const timeStr = rows[i].querySelector('.time-input').value;
+            const titleStr = rows[i].querySelector('.title-input').value;
+            
+            const centro = parseTempo(timeStr);
+            if (isNaN(centro)) {
+                alert(`O tempo na linha #${i + 1} ("${timeStr}") é inválido.`);
+                return;
+            }
+
+            let inicio = Math.max(0, centro - 5);
+            let fim = Math.min(videoDuration, centro + 15);
+
+            if (inicio >= fim) {
+                alert(`O intervalo da linha #${i + 1} está fora dos limites do vídeo.`);
+                return;
+            }
+
+            tarefas.push({
+                index: i + 1,
+                inicio: inicio,
+                fim: fim,
+                titulo: limparNomeFicheiro(titleStr || `corte_${i + 1}`)
+            });
+        }
+
+        processBtn.disabled = true;
+        previewContainer.innerHTML = '';
+        previewCard.style.display = 'none';
+        statusDiv.textContent = 'A processar cortes em lote...';
+
+        try {
+            const zip = new JSZip();
+
+            for (let t = 0; t < tarefas.length; t++) {
+                const tarefa = tarefas[t];
+                statusDiv.textContent = `A processar corte ${t + 1} de ${tarefas.length} ("${tarefa.titulo}")...`;
+
+                // Gerar o corte usando a API nativa
+                const blobItem = await cortarTrechoNativo(videoFile, tarefa.inicio, tarefa.fim);
+                const arrayBuffer = await blobItem.arrayBuffer();
+                const uint8ArrayData = new Uint8Array(arrayBuffer);
+
+                const nomeFicheiroFinal = `${tarefa.index}_${tarefa.titulo}.mp4`;
+                zip.file(nomeFicheiroFinal, uint8ArrayData);
+
+                const urlItem = URL.createObjectURL(blobItem);
+                const divItem = document.createElement('div');
+                divItem.className = 'preview-item';
+                divItem.innerHTML = `
+                    <strong>#${tarefa.index} - ${tarefa.titulo}</strong> (De ${tarefa.inicio.toFixed(1)}s até ${tarefa.fim.toFixed(1)}s)
+                    <br>
+                    <video controls src="${urlItem}"></video>
+                `;
+                previewContainer.appendChild(divItem);
+            }
+
+            statusDiv.textContent = 'A compactar resultados em ZIP...';
+            zipBlobGlobal = await zip.generateAsync({ type: 'blob' });
+
+            previewCard.style.display = 'block';
+            statusDiv.textContent = 'Cortes concluídos com sucesso! Pode pré-visualizar e descarregar.';
+        } catch (error) {
+            statusDiv.textContent = 'Ocorreu um erro durante o processamento nativo.';
+            console.error(error);
+        } finally {
+            processBtn.disabled = false;
+        }
+    }
+
+    function descarregarZip() {
+        if (!zipBlobGlobal) return;
+
+        const urlZip = URL.createObjectURL(zipBlobGlobal);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = urlZip;
+        a.download = 'videos_cortados.zip';
+        document.body.appendChild(a);
+        a.click();
+        
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(urlZip);
+        }, 1000);
+    }
+</script>
+
+</body>
+</html>
