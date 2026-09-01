@@ -6,6 +6,8 @@
     <title>Cortes de Vídeo</title>
     <!-- JSZip para compactar em ZIP -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- SheetJS (xlsx) para ler e criar ficheiros Excel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -80,6 +82,28 @@
             max-height: 200px;
             margin-top: 5px;
         }
+        .drop-zone {
+            border: 2px dashed #007bff;
+            border-radius: 6px;
+            padding: 20px;
+            text-align: center;
+            background: #f8f9fa;
+            color: #555;
+            cursor: pointer;
+            transition: background 0.3s, border-color 0.3s;
+            margin-bottom: 15px;
+        }
+        .drop-zone.dragover {
+            background: #e2e6ea;
+            border-color: #0056b3;
+            color: #0056b3;
+        }
+        footer {
+            text-align: center;
+            font-size: 0.9em;
+            color: #fff;
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -102,12 +126,24 @@
             Formato aceito: <code>H:MM:SS</code> (ex: <code>0:01:23</code>), <code>MM:SS</code> (ex: <code>01:23</code>) ou segundos. 
             <br>Cada corte subtrairá <strong>5s</strong> ao início e adicionará <strong>15s</strong> ao fim automaticamente.
         </p>
+
+        <!-- Zona de Drag & Drop e Upload Excel -->
+        <div id="dropZone" class="drop-zone">
+            📂 Arraste o seu ficheiro Excel (.xlsx) para aqui ou 
+            <label for="excelUpload" style="color: #007bff; cursor: pointer; text-decoration: underline;">clique para procurar</label>
+            <input type="file" id="excelUpload" accept=".xlsx, .xls, .csv" style="display: none;">
+        </div>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <button onclick="adicionarLinha()" id="addBtn">+ Adicionar Intervalo Manual</button>
+            <button type="button" style="background: #17a2b8;" onclick="descarregarModeloExcel()">📥 Descarregar Modelo Excel</button>
+        </div>
+
         <div id="intervalsContainer"></div>
-        <button onclick="adicionarLinha()" id="addBtn">+ Adicionar Intervalo</button>
     </div>
 
     <div class="card">
-        <h3>4. Processar, Ver Cortes e Descarregar</h3>
+        <h3>4. Processar, Ver Cortes e Descarregar (MP4)</h3>
         <button id="processBtn" onclick="processarCortes()" disabled>Executar Cortes e Gerar Pré-visualizações</button>
         <div id="status">Selecione um vídeo para começar.</div>
     </div>
@@ -118,9 +154,11 @@
         <br>
         <button id="downloadZipBtn" onclick="descarregarZip()" style="background: #28a745; font-size: 1.1em; width: 100%;">Descarregar Todos em ZIP</button>
     </div>
-<footer class="fixed bottom-0 left-0 w-full bg-gray-200 text-center text-sm text-gray-700 py-2 shadow-inner">
-  andrepe © 2026
-</footer>
+
+    <footer>
+        andrepe © 2026
+    </footer>
+
 <script>
     let videoFile = null;
     let videoDuration = 0;
@@ -135,6 +173,8 @@
     const statusDiv = document.getElementById('status');
     const previewCard = document.getElementById('previewCard');
     const previewContainer = document.getElementById('previewContainer');
+    const excelUpload = document.getElementById('excelUpload');
+    const dropZone = document.getElementById('dropZone');
 
     upload.addEventListener('change', (e) => {
         const file = e.target.files[0];
@@ -148,6 +188,91 @@
             };
         }
     });
+
+    // Eventos de Drag & Drop
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.add('dragover');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.classList.remove('dragover');
+        }, false);
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) {
+            processarFicheiroExcel(files[0]);
+        }
+    });
+
+    excelUpload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            processarFicheiroExcel(file);
+        }
+    });
+
+    function descarregarModeloExcel() {
+        const dados = [
+            ["Tempo", "Título"],
+            ["0:00:10", "Introducao"],
+            ["0:01:30", "Desenvolvimento"],
+            ["0:03:00", "Conclusao"]
+        ];
+        const ws = XLSX.utils.aoa_to_sheet(dados);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Cortes");
+        XLSX.writeFile(wb, "modelo_cortes.xlsx");
+    }
+
+    function processarFicheiroExcel(file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                
+                const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+                let importedCount = 0;
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i];
+                    if (!row || row.length === 0) continue;
+
+                    if (i === 0 && String(row[0]).toLowerCase().includes('tempo')) continue;
+
+                    const tempoVal = row[0] !== undefined ? String(row[0]).trim() : "";
+                    const tituloVal = row[1] !== undefined ? String(row[1]).trim() : "";
+
+                    if (tempoVal) {
+                        const totalRows = intervalsContainer.getElementsByClassName('time-row').length;
+                        if (totalRows >= MAX_INTERVALS) {
+                            alert('Limite máximo de 60 tempos atingido durante a importação.');
+                            break;
+                        }
+                        adicionarLinha(tempoVal, tituloVal);
+                        importedCount++;
+                    }
+                }
+                alert(`Importação concluída! ${importedCount} intervalos adicionados com sucesso.`);
+            } catch (err) {
+                console.error(err);
+                alert('Erro ao ler o ficheiro Excel. Certifique-se de que é um formato válido.');
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
 
     function adicionarLinha(tempoSugerido = "", tituloSugerido = "") {
         const rows = intervalsContainer.getElementsByClassName('time-row');
@@ -208,30 +333,42 @@
         return nome.replace(/[/\\?%*:|"<>]/g, '_').trim() || 'video_cortado';
     }
 
-    // Função para extrair o troço usando MediaRecorder nativo do navegador
     async function cortarTrechoNativo(file, startTime, endTime) {
         return new Promise((resolve, reject) => {
             const video = document.createElement('video');
             video.src = URL.createObjectURL(file);
-            video.muted = true;
+            video.muted = false;
+            video.playsInline = true;
+            video.preload = 'auto';
 
-            video.onloadedmetadata = () => {
-                video.currentTime = Math.max(0, startTime);
-            };
+            let gravacaoIniciada = false;
 
-            video.onseeked = () => {
+            video.addEventListener('error', (err) => reject(err));
+
+            video.addEventListener('seeked', async () => {
+                if (gravacaoIniciada) return;
+                gravacaoIniciada = true;
+
                 try {
+                    // Pequeno atraso para estabilizar a renderização do frame após o seek
+                    await new Promise(r => setTimeout(r, 150));
+
                     const stream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
                     if (!stream) {
                         reject(new Error("CaptureStream não suportado neste navegador."));
                         return;
                     }
 
-                    const options = { mimeType: 'video/webm;codecs=vp9' };
-                    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-                        options.mimeType = 'video/webm';
+                    // Tentar forçar MP4 prioritariamente
+                    let mimeType = 'video/mp4';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = 'video/mp4;codecs="avc1.424028, mp4a.40.2"';
+                        if (!MediaRecorder.isTypeSupported(mimeType)) {
+                            mimeType = 'video/webm;codecs=vp9,opus';
+                        }
                     }
 
+                    const options = { mimeType };
                     const mediaRecorder = new MediaRecorder(stream, options);
                     const chunks = [];
 
@@ -240,26 +377,35 @@
                     };
 
                     mediaRecorder.onstop = () => {
-                        const blob = new Blob(chunks, { type: 'video/mp4' }); // ou webm adaptado
-                        resolve(blob);
+                        const finalMime = mediaRecorder.mimeType || mimeType;
+                        const blob = new Blob(chunks, { type: finalMime });
+                        resolve({ blob, mime: finalMime });
+                        URL.revokeObjectURL(video.src);
                     };
 
                     mediaRecorder.start();
-                    video.play();
+                    
+                    video.play().catch(err => {
+                        mediaRecorder.stop();
+                        reject(err);
+                    });
 
                     const duracaoMs = (endTime - startTime) * 1000;
                     setTimeout(() => {
-                        mediaRecorder.stop();
-                        video.pause();
-                        URL.revokeObjectURL(video.src);
+                        if (mediaRecorder.state !== 'inactive') {
+                            mediaRecorder.stop();
+                            video.pause();
+                        }
                     }, duracaoMs);
 
                 } catch (err) {
                     reject(err);
                 }
-            };
+            });
 
-            video.onerror = (err) => reject(err);
+            video.onloadedmetadata = () => {
+                video.currentTime = Math.max(0, startTime);
+            };
         });
     }
 
@@ -314,13 +460,15 @@
                 const tarefa = tarefas[t];
                 statusDiv.textContent = `A processar corte ${t + 1} de ${tarefas.length} ("${tarefa.titulo}")...`;
 
-                // Gerar o corte usando a API nativa
-                const blobItem = await cortarTrechoNativo(videoFile, tarefa.inicio, tarefa.fim);
-                const arrayBuffer = await blobItem.arrayBuffer();
-                const uint8ArrayData = new Uint8Array(arrayBuffer);
+                const resultadoCorte = await cortarTrechoNativo(videoFile, tarefa.inicio, tarefa.fim);
+                const blobItem = resultadoCorte.blob;
+                const realMime = resultadoCorte.mime;
 
-                const nomeFicheiroFinal = `${tarefa.index}_${tarefa.titulo}.mp4`;
-                zip.file(nomeFicheiroFinal, uint8ArrayData);
+                const extensao = realMime.includes('mp4') ? 'mp4' : 'webm';
+                const nomeFicheiroFinal = `${tarefa.index}_${tarefa.titulo}.${extensao}`;
+
+                const arrayBuffer = await blobItem.arrayBuffer();
+                zip.file(nomeFicheiroFinal, new Uint8Array(arrayBuffer));
 
                 const urlItem = URL.createObjectURL(blobItem);
                 const divItem = document.createElement('div');
